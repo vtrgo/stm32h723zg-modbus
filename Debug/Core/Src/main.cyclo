@@ -1,0 +1,10 @@
+../Core/Src/main.c:85:6:mg_random	3
+../Core/Src/main.c:94:10:mg_millis	1
+../Core/Src/main.c:98:5:_write	3
+../Core/Src/main.c:111:5:main	1
+../Core/Src/main.c:162:6:SystemClock_Config	4
+../Core/Src/main.c:223:13:MX_ETH_Init	2
+../Core/Src/main.c:272:13:MX_RNG_Init	2
+../Core/Src/main.c:299:13:MX_USART3_UART_Init	5
+../Core/Src/main.c:347:13:MX_GPIO_Init	1
+../Core/Src/main.c:424:6:Error_Handler	1
