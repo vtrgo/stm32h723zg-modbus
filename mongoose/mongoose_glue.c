@@ -6,9 +6,8 @@
 
 #include "mongoose_glue.h"
 
-// Mock a device that has 5 read/write registers at address 1000
-// static uint16_t s_modbus_regs[] = {11, 22, 33, 44, 55, 66, 77, 88, 99, 100};
-static uint16_t s_modbus_regs[100] = {0}; // Array of 100 registers, initialized to zero
+// Mock a device that has 125 read/write registers at address 1000
+static uint16_t s_modbus_regs[225] = {0}; // Array of 125 registers, initialized to zero
 static uint16_t s_modbus_base = 1000;  // Base address of our registers
 
 // Read/write registers via Modbus API
@@ -22,7 +21,7 @@ bool glue_modbus_read_reg(uint16_t address, uint16_t *value) {
     *value = s_modbus_regs[address - s_modbus_base];
     success = true;
   }
-  MG_INFO(("%s: %hu = %hu", success ? "OK" : "FAIL", address, *value));
+  MG_INFO(("%s: %hu = %hu", success ? "Read OK" : "Read FAIL", address, *value));
   return success;
 }
 
@@ -33,12 +32,18 @@ bool glue_modbus_write_reg(uint16_t address, uint16_t value) {
     s_modbus_regs[address - s_modbus_base] = value;
     success = true;
   }
-  MG_INFO(("%s: %hu = %hu", success ? "OK" : "FAIL", address, value));
+  MG_INFO(("%s: %hu = %hu", success ? "Write OK" : "Write FAIL", address, value));
   return success;
 
 }
 
-
+uint16_t glue_get_local_reg(uint16_t address) {
+  size_t count = sizeof(s_modbus_regs) / sizeof(s_modbus_regs[0]);
+  if (address >= s_modbus_base && address < s_modbus_base + count) {
+    return s_modbus_regs[address - s_modbus_base];
+  }
+  return 0;
+}
 // Authenticate user/password. Return access level for the authenticated user:
 //   0 - authentication error
 //   1,2,3... - authentication success. Higher levels are more privileged than lower

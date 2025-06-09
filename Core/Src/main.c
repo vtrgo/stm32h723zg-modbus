@@ -102,6 +102,17 @@ int _write(int fd, unsigned char *buf, int len) {
   return len;
 }
 
+void my_get_leds(struct leds *leds) {
+  leds->led1 = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0);
+  leds->led2 = HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_1);
+  leds->led3 = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_14);
+}
+void my_set_leds(struct leds *leds) {
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, leds->led1);
+  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_1, leds->led2);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, leds->led3);
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -138,8 +149,12 @@ int main(void)
   MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
   mongoose_init();
+  mongoose_set_http_handlers("leds", my_get_leds, my_set_leds);
+  glue_modbus_write_reg(1200, 9999);
   for (;;) {
+
     mongoose_poll();
+
   }
 
   /* USER CODE END 2 */

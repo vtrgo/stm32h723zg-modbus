@@ -82,6 +82,8 @@ void glue_update_state(void);
 bool glue_modbus_read_reg(uint16_t address, uint16_t *value);
 bool glue_modbus_write_reg(uint16_t address, uint16_t value);
 
+//
+uint16_t glue_get_local_reg(uint16_t address);
 
 int    glue_authenticate(const char *user, const char *pass);
 
