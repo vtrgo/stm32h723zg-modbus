@@ -4,6 +4,8 @@
 
 // Default mock implementation of the API callbacks
 
+#include "stm32h7xx_hal.h"
+
 #include "mongoose_glue.h"
 
 // Mock a device that has 125 read/write registers at address 1000
@@ -25,6 +27,10 @@ bool glue_modbus_read_reg(uint16_t address, uint16_t *value) {
   return success;
 }
 
+void ws_voltage(struct mg_connection *c) {
+  mg_ws_printf(c, WEBSOCKET_OP_TEXT, "{%m: %u}", MG_ESC("voltage"), glue_get_local_reg(1010));
+}
+
 bool glue_modbus_write_reg(uint16_t address, uint16_t value) {
   bool success = false;
   size_t count = sizeof(s_modbus_regs) / sizeof(s_modbus_regs[0]);
@@ -43,6 +49,13 @@ uint16_t glue_get_local_reg(uint16_t address) {
     return s_modbus_regs[address - s_modbus_base];
   }
   return 0;
+}
+
+bool glue_get_local_block(uint16_t start, uint16_t *dest, size_t len) {
+  size_t count = sizeof(s_modbus_regs) / sizeof(s_modbus_regs[0]);
+  if (start < s_modbus_base || (start + len) > (s_modbus_base + count)) return false;
+  memcpy(dest, &s_modbus_regs[start - s_modbus_base], len * sizeof(uint16_t));
+  return true;
 }
 // Authenticate user/password. Return access level for the authenticated user:
 //   0 - authentication error
@@ -126,14 +139,24 @@ void glue_reply_graph_data(struct mg_connection *c, struct mg_http_message *hm) 
 static struct state s_state = {42, 27, 67, 10, "1.0.0", true, false, 83};
 void glue_get_state(struct state *data) {
   *data = s_state;  // Sync with your device
+  data->speed = glue_get_local_reg(1005);
+  data->temperature = glue_get_local_reg(1006);
+  data->humidity = glue_get_local_reg(1007);
+  data->level= glue_get_local_reg(1008);
 }
 
 static struct leds s_leds = {false, true, false};
 void glue_get_leds(struct leds *data) {
   *data = s_leds;  // Sync with your device
+  data->led1 = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0);
+  data->led2 = HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_1);
+  data->led3 = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_14);
 }
 void glue_set_leds(struct leds *data) {
   s_leds = *data; // Sync with your device
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, data->led1 ? GPIO_PIN_SET : GPIO_PIN_RESET);  // LD1
+  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_1, data->led2 ? GPIO_PIN_SET : GPIO_PIN_RESET);  // LD2
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, data->led3 ? GPIO_PIN_SET : GPIO_PIN_RESET); // LD3
 }
 
 static struct network_settings s_network_settings = {"192.168.0.42", "192.168.0.1", "255.255.255.0", true};
@@ -172,4 +195,3 @@ void glue_reply_events(struct mg_connection *c, struct mg_http_message *hm) {
   (void) hm;
   mg_http_reply(c, 200, headers, "%s\n", value);
 }
-

@@ -23,16 +23,23 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "mongoose_glue.h"
+#include "mongoose.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
+typedef struct {
+    uint16_t status_bits[4];     // UINT[0], UINT[1], UINT[2], UINT[3] - 64 bits
+    uint16_t data_words[64];
+} PLC_Snapshot;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define API_URL "http://192.168.1.133:8080/api/stats?start=-1h&stop=now()"
+#define MAX_RESPONSE_SIZE 4096
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -62,12 +69,16 @@ ETH_TxPacketConfig TxConfig;
 
 ETH_HandleTypeDef heth;
 
+I2C_HandleTypeDef hi2c1;
+
 RNG_HandleTypeDef hrng;
 
 UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
-
+static char response_buf[MAX_RESPONSE_SIZE];
+static size_t response_len = 0;
+static bool request_done = false;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -76,8 +87,9 @@ static void MX_GPIO_Init(void);
 static void MX_ETH_Init(void);
 static void MX_RNG_Init(void);
 static void MX_USART3_UART_Init(void);
+static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
-
+void perform_http_data_read(struct mg_mgr *mgr);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -88,7 +100,7 @@ bool mg_random(void *buf, size_t len) {  // Use on-board RNG
     HAL_RNG_GenerateRandomNumber(&hrng, &r);
     memcpy((char *) buf + n, &r, n + sizeof(r) > len ? len - n : sizeof(r));
   }
-  return true; // TODO(): ensure successful RNG init, then return on false above
+  return true;
 }
 
 uint64_t mg_millis(void) {
@@ -96,23 +108,40 @@ uint64_t mg_millis(void) {
 }
 
 int _write(int fd, unsigned char *buf, int len) {
-  if (fd == 1 || fd == 2) {                     // stdout or stderr ?
-    HAL_UART_Transmit(&huart3, buf, len, 999);  // Print to the UART
+  if (fd == 1 || fd == 2) {
+    HAL_UART_Transmit(&huart3, buf, len, 999);
   }
   return len;
 }
 
-void my_get_leds(struct leds *leds) {
-  leds->led1 = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0);
-  leds->led2 = HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_1);
-  leds->led3 = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_14);
-}
-void my_set_leds(struct leds *leds) {
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, leds->led1);
-  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_1, leds->led2);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, leds->led3);
+static void http_event_handler(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
+  if (ev == MG_EV_HTTP_MSG) {
+    struct mg_http_message *hm = (struct mg_http_message *) ev_data;
+    size_t copy_len = hm->body.len < MAX_RESPONSE_SIZE - 1 ? hm->body.len : MAX_RESPONSE_SIZE - 1;
+    memcpy(response_buf, hm->body.buf, copy_len);
+    response_buf[copy_len] = '\0';
+    response_len = copy_len;
+    printf("HTTP Response: %.*s\r\n", (int) response_len, response_buf);
+    request_done = true;
+    c->is_closing = 1;
+  } else if (ev == MG_EV_CLOSE && !request_done) {
+    printf("HTTP request failed or connection closed early\r\n");
+  }
 }
 
+
+void perform_http_data_read(struct mg_mgr *mgr) {
+  request_done = false;
+  struct mg_connection *c = mg_http_connect(mgr, API_URL, http_event_handler, NULL);
+  if (c == NULL) {
+    printf("HTTP connect failed\r\n");
+    return;
+  }
+  mg_printf(c, "GET %s HTTP/1.0\r\nHost: 192.168.1.133\r\n\r\n", "/api/stats?start=-1h&stop=now()");
+  while (!request_done) mg_mgr_poll(mgr, 100);
+}
+
+void write_snapshot_to_nfc(void);
 /* USER CODE END 0 */
 
 /**
@@ -147,16 +176,36 @@ int main(void)
   MX_ETH_Init();
   MX_RNG_Init();
   MX_USART3_UART_Init();
+  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
+  printf("System initialized\n");
   mongoose_init();
-  mongoose_set_http_handlers("leds", my_get_leds, my_set_leds);
-  glue_modbus_write_reg(1200, 9999);
+  mongoose_add_ws_handler(200, ws_voltage);
+  write_snapshot_to_nfc();
+
+  uint8_t button_pressed = 0;
+  struct mg_mgr mgr;
+  mg_mgr_init(&mgr);
+
   for (;;) {
+      mongoose_poll();
 
-    mongoose_poll();
-
+      if (HAL_GPIO_ReadPin(B1_GPIO_Port, B1_Pin) == GPIO_PIN_SET) {
+          if (!button_pressed) {
+              button_pressed = 1;
+              glue_update_state();
+              printf("B1 Button Pressed: Event Triggered\r\n");
+              perform_http_data_read(&mgr);
+              printf("Data Read Complete\r\n");
+              printf("Writing NFC Snapshot:\r\n");
+              write_snapshot_to_nfc();
+              printf("PLC snapshot written to NFC tag\r\n");
+          }
+      } else {
+          button_pressed = 0;
+      }
   }
-
+  mg_mgr_free(&mgr);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -276,6 +325,54 @@ static void MX_ETH_Init(void)
   /* USER CODE BEGIN ETH_Init 2 */
 
   /* USER CODE END ETH_Init 2 */
+
+}
+
+/**
+  * @brief I2C1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C1_Init(void)
+{
+
+  /* USER CODE BEGIN I2C1_Init 0 */
+
+  /* USER CODE END I2C1_Init 0 */
+
+  /* USER CODE BEGIN I2C1_Init 1 */
+
+  /* USER CODE END I2C1_Init 1 */
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.Timing = 0x20303E5D;
+  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Analogue filter
+  */
+  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Digital filter
+  */
+  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c1, 0) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C1_Init 2 */
+
+  /* USER CODE END I2C1_Init 2 */
 
 }
 
@@ -429,6 +526,70 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+void collect_plc_data(PLC_Snapshot *snapshot) {
+    // Example data - adjust as needed to match your PLC's actual output
+    snapshot->status_bits[0] = 0b0000000000000100;
+    snapshot->status_bits[1] = 0b0001000000000001;
+    snapshot->status_bits[2] = 0b0000000000011011;
+    snapshot->status_bits[3] = 0b0000000000101010;
+
+    for (int i = 0; i < 64; i++) {
+        snapshot->data_words[i] = 100 + i; // Example calculation
+    }
+}
+
+void write_snapshot_to_nfc(void) {
+    uint16_t i2c_addr = 0x53 << 1;        // 0xA6
+    uint16_t mem_addr = 0x0008;           // NDEF message start offset
+    HAL_StatusTypeDef status;
+
+    PLC_Snapshot snapshot;
+    collect_plc_data(&snapshot);
+
+    uint8_t snapshot_payload[sizeof(snapshot)];
+    memcpy(snapshot_payload, &snapshot, sizeof(snapshot));
+
+    // Correct NDEF record length calculation
+    uint8_t type_length = 24; // "application/octet-stream" is 24 bytes
+    uint8_t ndef_header_size = 1 + 1 + 1; // Header (D2) + type_len + payload_len
+    uint16_t payload_length = sizeof(snapshot_payload);
+    uint16_t ndef_record_length = ndef_header_size + type_length + payload_length;
+
+    uint8_t ndef_tlv_length = ndef_record_length;
+    uint16_t total_tlv_length = ndef_tlv_length + 2; // +2 for TLV terminator (FE 00)
+
+    uint8_t ndef_buffer[256];
+    uint8_t i = 0;
+
+    // NDEF TLV
+    ndef_buffer[i++] = 0x03; // TLV Type: NDEF message
+    ndef_buffer[i++] = ndef_tlv_length; // Length of NDEF record
+
+    // NDEF Record
+    ndef_buffer[i++] = 0xD2; // MB=1, ME=1, SR=1, TNF=0x02 (MIME)
+    ndef_buffer[i++] = type_length; // Type Length (24 bytes)
+    ndef_buffer[i++] = payload_length; // Payload Length (assuming payload_length <= 255)
+
+    // Type "application/octet-stream" (24 bytes)
+    memcpy(&ndef_buffer[i], "application/octet-stream", type_length);
+    i += type_length;
+
+    // Payload
+    memcpy(&ndef_buffer[i], snapshot_payload, payload_length);
+    i += payload_length;
+
+    // TLV Terminator
+    ndef_buffer[i++] = 0xFE; // Terminator TLV
+    ndef_buffer[i++] = 0x00;
+
+    status = HAL_I2C_Mem_Write(&hi2c1, i2c_addr, mem_addr,
+                               I2C_MEMADD_SIZE_16BIT,
+                               ndef_buffer, i,
+                               HAL_MAX_DELAY);
+}
+
+
 
 /* USER CODE END 4 */
 

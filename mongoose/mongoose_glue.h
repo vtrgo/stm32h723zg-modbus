@@ -45,6 +45,7 @@ extern struct mg_mgr g_mgr;  // Mongoose event manager
 
 void mongoose_set_http_handlers(const char *name, ...);
 void mongoose_add_ws_handler(unsigned ms, void (*)(struct mg_connection *));
+void ws_voltage(struct mg_connection *c);
 
 struct mongoose_mqtt_handlers {
   struct mg_connection *(*connect_fn)(mg_event_handler_t);
@@ -77,13 +78,10 @@ void glue_unlock(void);     // Unlock global Mongoose mutex
 void glue_update_state(void);
 
 // Firmware Glue
-
-
 bool glue_modbus_read_reg(uint16_t address, uint16_t *value);
 bool glue_modbus_write_reg(uint16_t address, uint16_t value);
-
-//
 uint16_t glue_get_local_reg(uint16_t address);
+bool glue_get_local_block(uint16_t start, uint16_t *dest, size_t len);
 
 int    glue_authenticate(const char *user, const char *pass);
 
